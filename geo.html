@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Geo</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body class="bg-zinc-950 text-white min-h-screen">
+
+  <!-- LOGIN SCREEN -->
+  <div id="loginScreen" class="min-h-screen flex items-center justify-center">
+    <div class="text-center">
+      <h1 class="text-6xl font-bold tracking-tighter mb-4">Geo</h1>
+      <p class="text-xl text-zinc-400 mb-10">Where are your models?</p>
+      <button onclick="startFanvueLogin()" class="px-12 py-5 bg-emerald-600 hover:bg-emerald-700 rounded-3xl text-xl font-semibold flex items-center gap-3 mx-auto">
+        <i class="fa-solid fa-right-to-bracket"></i>
+        <span>Login with Fanvue</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- SUBSCRIPTION BLOCKED -->
+  <div id="subscriptionBlocked" class="hidden min-h-screen flex items-center justify-center">
+    <div class="text-center max-w-md">
+      <h2 class="text-3xl font-semibold mb-4">No active subscription</h2>
+      <p class="text-zinc-400 mb-8">You need an active subscription to use Geo.</p>
+      <button onclick="logout()" class="px-8 py-3 bg-red-600 hover:bg-red-700 rounded-3xl">Logout</button>
+    </div>
+  </div>
+
+  <!-- MAIN APP -->
+  <div id="mainApp" class="hidden">
+    <div class="max-w-7xl mx-auto p-6">
+      <div class="flex justify-between items-center mb-8">
+        <div>
+          <h1 class="text-5xl font-semibold tracking-tighter">Geo</h1>
+          <p class="text-zinc-400 text-lg">Where are your models?</p>
+        </div>
+        <button onclick="logout()" class="px-6 py-3 bg-red-600 hover:bg-red-700 rounded-3xl text-sm">Logout</button>
+      </div>
+
+      <button onclick="showAddModal()" class="px-8 py-3 bg-emerald-600 hover:bg-emerald-700 rounded-3xl text-lg font-semibold flex items-center gap-3 mb-8">
+        <i class="fa-solid fa-plus"></i>
+        <span>Add City</span>
+      </button>
+
+      <div id="citiesGrid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6"></div>
+    </div>
+  </div>
+
+  <!-- Add City Modal -->
+  <div id="addModal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+    <div class="bg-zinc-900 rounded-3xl w-full max-w-lg mx-4 overflow-hidden">
+      <div class="p-6">
+        <h2 class="text-2xl font-semibold mb-4">Add New City</h2>
+        <input id="searchInput" type="text" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-4 text-lg focus:outline-none focus:border-emerald-500" placeholder="Search city..." oninput="searchCities()">
+        <div id="suggestions" class="max-h-80 overflow-auto mt-2 bg-zinc-800 rounded-2xl"></div>
+      </div>
+      <div class="border-t border-zinc-700 p-4 flex justify-end gap-3">
+        <button onclick="hideAddModal()" class="px-8 py-3 text-zinc-400">Cancel</button>
+        <button onclick="hideAddModal()" class="px-8 py-3 bg-emerald-600 hover:bg-emerald-700 rounded-2xl">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ==================== FANVUE CONFIG ====================
+    const CLIENT_ID = "0c11bfeb-c6f3-4354-947a-7769504ce0f3";
+    const REDIRECT_URI = window.location.href.split('?')[0];
+    const AUTH_URL = "https://auth.fanvue.com/oauth2/auth";
+    const TOKEN_URL = "https://auth.fanvue.com/oauth2/token";
+    const APP_UUID = "DEINE_APP_UUID_HIER";   // ← Hier deine App-UUID aus dem Fanvue Dashboard eintragen
+    // ======================================================
+
+    let cities = [];
+    let accessToken = null;
+
+    function setCookie(name, value, days = 30) {
+      const date = new Date();
+      date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+      document.cookie = `${name}=${value};expires=${date.toUTCString()};path=/`;
+    }
+
+    function getCookie(name) {
+      const value = `; ${document.cookie}`;
+      const parts = value.split(`; ${name}=`);
+      if (parts.length === 2) return parts.pop().split(';').shift();
+      return null;
+    }
+
+    function checkAuth() {
+      const savedToken = getCookie('fanvue_token');
+      if (savedToken) {
+        accessToken = savedToken;
+        checkSubscription();
+      }
+    }
+
+    async function startFanvueLogin() {
+      const codeVerifier = generateCodeVerifier();
+      const codeChallenge = await generateCodeChallenge(codeVerifier);
+      setCookie('code_verifier', codeVerifier, 10);
+
+      const params = new URLSearchParams({
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        response_type: 'code',
+        code_challenge: codeChallenge,
+        code_challenge_method: 'S256',
+        scope: 'read'
+      });
+
+      window.location.href = `${AUTH_URL}?${params.toString()}`;
+    }
+
+    function generateCodeVerifier() {
+      const array = new Uint8Array(32);
+      crypto.getRandomValues(array);
+      return Array.from(array, dec => ('0' + dec.toString(16)).substr(-2)).join('');
+    }
+
+    async function generateCodeChallenge(verifier) {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(verifier);
+      const digest = await crypto.subtle.digest('SHA-256', data);
+      return btoa(String.fromCharCode(...new Uint8Array(digest)))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    async function handleCallback() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const code = urlParams.get('code');
+      if (!code) return;
+
+      const codeVerifier = getCookie('code_verifier');
+      if (!codeVerifier) return;
+
+      const body = new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: CLIENT_ID,
+        code: code,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: codeVerifier
+      });
+
+      try {
+        const res = await fetch(TOKEN_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body
+        });
+        const data = await res.json();
+        if (data.access_token) {
+          accessToken = data.access_token;
+          setCookie('fanvue_token', accessToken, 30);
+          window.history.replaceState({}, document.title, REDIRECT_URI);
+          checkSubscription();
+        }
+      } catch (e) {}
+    }
+
+    async function checkSubscription() {
+      if (!APP_UUID || APP_UUID === "DEINE_APP_UUID_HIER") {
+        alert("Bitte trage deine App-UUID in den Code ein (Zeile 28)");
+        return;
+      }
+      try {
+        const res = await fetch(`https://api.fanvue.com/apps/${APP_UUID}/subscription/me`, {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'X-Fanvue-API-Version': '2025-06-26'
+          }
+        });
+        const data = await res.json();
+
+        if (data.active === true) {
+          document.getElementById('loginScreen').classList.add('hidden');
+          document.getElementById('subscriptionBlocked').classList.add('hidden');
+          document.getElementById('mainApp').classList.remove('hidden');
+          renderGrid();
+        } else {
+          document.getElementById('loginScreen').classList.add('hidden');
+          document.getElementById('mainApp').classList.add('hidden');
+          document.getElementById('subscriptionBlocked').classList.remove('hidden');
+        }
+      } catch (e) {
+        alert('Subscription check failed');
+      }
+    }
+
+    function renderGrid() {
+      const grid = document.getElementById('citiesGrid');
+      const empty = document.getElementById('emptyState');
+      grid.innerHTML = '';
+
+      if (cities.length === 0) {
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+
+      cities.forEach((city, i) => {
+        const card = document.createElement('div');
+        card.className = 'bg-zinc-900 rounded-3xl p-6 border border-zinc-800';
+        card.style.borderColor = city.color || '#10b981';
+        card.innerHTML = `
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-3">
+              <input type="color" value="${city.color || '#10b981'}" onchange="changeColor(${i}, this.value)" class="w-8 h-8 rounded-full bg-transparent border-0 cursor-pointer">
+              <div>
+                <h2 class="text-2xl font-semibold">${city.name}</h2>
+                <p class="text-zinc-400">${city.country}</p>
+              </div>
+            </div>
+            <button onclick="removeCity(${i})" class="text-red-400 hover:text-red-500"><i class="fa-solid fa-trash"></i></button>
+          </div>
+
+          <div class="mb-4">
+            <input type="text" value="${city.modelName || ''}" oninput="updateModelName(${i}, this.value)" class="w-full bg-zinc-800 border-0 rounded-2xl px-4 py-3 text-sm focus:outline-none" placeholder="Model name">
+          </div>
+
+          <div class="mb-6">
+            <div class="text-xs text-zinc-400 mb-1">CURRENT TIME</div>
+            <div id="time-${i}" class="text-5xl font-light tabular-nums"></div>
+          </div>
+
+          <div id="weather-${i}" class="flex items-center gap-5 bg-zinc-800 rounded-2xl p-5 mb-6"></div>
+
+          <textarea oninput="updateComment(${i}, this.value)" class="w-full bg-zinc-800 rounded-2xl p-4 text-sm h-20 resize-y focus:outline-none" placeholder="Notes...">${city.comment || ''}</textarea>
+        `;
+        grid.appendChild(card);
+
+        startLiveClock(i, city.timezone);
+        fetchWeather(i, city.lat, city.lon);
+      });
+    }
+
+    function changeColor(i, color) { cities[i].color = color; saveCities(); renderGrid(); }
+    function startLiveClock(i, tz) {
+      const el = document.getElementById(`time-${i}`);
+      setInterval(() => el.textContent = new Intl.DateTimeFormat('en-US', {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:true, timeZone:tz}).format(new Date()), 1000);
+    }
+    async function fetchWeather(i, lat, lon) {
+      try {
+        const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
+        const data = await res.json();
+        const w = data.current_weather;
+        const temp = Math.round(w.temperature);
+        const icons = {0:'☀️',1:'🌤️',2:'⛅',3:'☁️',45:'🌫️',61:'🌧️',71:'❄️',95:'⛈️'};
+        document.getElementById(`weather-${i}`).innerHTML = `<div class="text-6xl">${icons[w.weathercode]||'🌥️'}</div><div><div class="text-4xl font-light">${temp}°C</div><div class="text-zinc-400 text-sm">Live weather</div></div>`;
+      } catch(e){}
+    }
+
+    function showAddModal() { document.getElementById('addModal').classList.remove('hidden'); document.getElementById('searchInput').focus(); }
+    function hideAddModal() { document.getElementById('addModal').classList.add('hidden'); }
+
+    async function searchCities() {
+      const q = document.getElementById('searchInput').value.trim();
+      const div = document.getElementById('suggestions');
+      if (q.length < 2) { div.innerHTML = ''; return; }
+      try {
+        const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=en`);
+        const data = await res.json();
+        let html = '';
+        data.results.forEach(r => {
+          html += `<div onclick="selectCity('${r.name}','${r.country}',${r.latitude},${r.longitude},'${r.timezone}')" class="px-5 py-4 hover:bg-zinc-700 cursor-pointer border-b border-zinc-700 last:border-none">
+            <div class="font-medium">${r.name}, ${r.country}</div>
+            <div class="text-xs text-zinc-400">${r.timezone}</div>
+          </div>`;
+        });
+        div.innerHTML = html || '<div class="p-4 text-zinc-400">No cities found</div>';
+      } catch(e) {}
+    }
+
+    function selectCity(name, country, lat, lon, timezone) {
+      if (cities.length >= 15) { alert('Maximum of 15 cities reached'); hideAddModal(); return; }
+      cities.push({name, country, lat, lon, timezone, modelName:'', comment:'', color:'#10b981'});
+      saveCities();
+      renderGrid();
+      hideAddModal();
+    }
+
+    function removeCity(i) {
+      if (confirm('Remove this city?')) {
+        cities.splice(i,1);
+        saveCities();
+        renderGrid();
+      }
+    }
+
+    function updateModelName(i, v) { cities[i].modelName = v; saveCities(); }
+    function updateComment(i, v) { cities[i].comment = v; saveCities(); }
+
+    function saveCities() {
+      setCookie('geo_cities', JSON.stringify(cities));
+    }
+
+    function logout() {
+      document.cookie = 'fanvue_token=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/';
+      location.reload();
+    }
+
+    window.onload = () => {
+      checkAuth();
+      handleCallback();
+    };
+  </script>
+</body>
+</html>
